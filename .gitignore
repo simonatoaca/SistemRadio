@@ -1,4 +1,6 @@
 *.pdf
 *.png
 *.lbr
-
+*/.vscode/*
+.vscode/
+*/*/*.exe
