@@ -1,5 +1,4 @@
 #include <pins_arduino.h>
-#include "spi.h"
 
 /* PAGINA 176 din datasheet */
 
