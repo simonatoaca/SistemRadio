@@ -1,7 +1,11 @@
 #include <pins_arduino.h>
+#include "binary.h"
 #include "util/delay.h"
 #include "Arduino.h"
 #include "avr/interrupt.h"
+#include "st7735.h"
+
+float p = 3.1415926;
 
 #define LEFT_TURNS B11110000
 #define RIGHT_TURNS B00001111
@@ -9,12 +13,25 @@
 volatile uint8_t counter = 0;
 volatile uint8_t turns = 0;
 
-void toggle_led()
+
+void rotary_encoder_init()
 {
-	PORTB ^= (1 << PB5);
+	// Set SW pin (PD2) as input and enable pull-up resistor
+	PORTD |= (1 << PD2);
+
+	// Enable:
+	// INT0 to trigger on the falling edge
+	// INT1 to trigger on the rising edge
+	EIMSK |= (1 << INT1) | (1 << INT0);
+	EICRA |= (1 << ISC11) | (1 << ISC10) | (1 << ISC01);
 }
 
-// Pin B
+// SW of Rotary Encoder
+ISR(INT0_vect) {
+	// counter++;
+}
+
+// Pin B of Rotary Encoder
 ISR(INT1_vect) {
 	// Pin A was already activated -> right turn
 	if (PIND & (1 << PD4)) {
@@ -32,22 +49,20 @@ int main()
 {
 	Serial.begin(9600);
 
+	_delay_ms(500);
+
 	// LED pin as output and turn it off
 	DDRB |= (1 << PB5);
 	PORTB &= ~(1 << PB5);
 
-	// Enable INT1 to trigger on the rising edge
-	EIMSK |= (1 << INT1);
-	EICRA |= (1 << ISC11) | (1 << ISC10);
-
+	// rotary_encoder_init();
 
 	sei();
 
-	uint8_t old_counter = counter;
-	while (1) {
-		if (counter != old_counter) {
-			Serial.println(counter);
-			old_counter = counter;
-		}
-	};
+	lcd_init();
+
+	_delay_ms(10);
+
+	// lcd_write_line(50, 50, 15, 5, 0xf800);
+	lcd_fill_screen();
 }
