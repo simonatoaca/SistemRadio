@@ -2,12 +2,14 @@
 #include "spi_disp.h"
 #include "binary.h"
 #include "util/delay.h"
+#include "font8x8_basic.h"
+#include "avr/pgmspace.h"
 
 #define MIN_X ((uint8_t)0x00)
-#define MAX_X ((uint8_t)0x9F)
+#define MAX_X ((uint8_t)0x7F)
 
 #define MIN_Y ((uint8_t)0x00)
-#define MAX_Y ((uint8_t)0x7F)
+#define MAX_Y ((uint8_t)0x9F)
 
 #define SW_RESET ((uint8_t)0x01)
 #define DISPOFF ((uint8_t)0x28)
@@ -28,10 +30,8 @@
 #define BLACK 0x0000
 #define RED 0xF800
 
-void toggle_led()
-{
-	PORTB ^= (1 << PB5);
-}
+#define CHAR_HEIGHT (8)
+#define CHAR_WIDTH (8)
 
 void lcd_send_cmd(uint8_t command)
 {
@@ -74,6 +74,46 @@ void lcd_set_position(uint16_t xs, uint16_t xe, uint16_t ys, uint16_t ye)
 	lcd_send_16(ye);
 }
 
+void lcd_set_pixel()
+{
+	lcd_send_cmd(RAMWR);
+	lcd_send_16(RED);
+}
+
+void lcd_write(const char *text, uint8_t xs, uint8_t ys, uint16_t color)
+{
+	uint8_t len = strlen_P(text);
+
+	lcd_set_position(xs, xs + CHAR_HEIGHT - 1, ys, ys + (len * CHAR_WIDTH) - 1);
+
+	lcd_send_cmd(RAMWR);
+
+	for (uint8_t row = 0; row < CHAR_HEIGHT; row++) {
+		for (uint8_t char_idx = 0; char_idx < len; char_idx++) {
+			uint8_t character = pgm_read_byte(&font8x8_basic[(uint8_t)text[char_idx]][row]);
+
+			for (uint8_t b = 0; b < 8; b++) {
+				lcd_send_16(((character >> b) & 1) ? color : BLACK);
+			}
+		}
+	}
+}
+
+void lcd_write_line(uint8_t xs, uint8_t ys, uint8_t width, uint8_t height, uint16_t color)
+{
+	lcd_set_position(xs, xs + width - 1, ys, ys + height - 1);
+
+	lcd_send_cmd(RAMWR);
+	for (int i = 0; i < height * width; i++) {
+		lcd_send_16(color);
+	}
+}
+
+void lcd_fill_screen()
+{
+	lcd_write_line(MIN_X, MIN_Y, MAX_X, MAX_Y, BLACK);
+}
+
 void lcd_init()
 {
 	// Set pins as outputs
@@ -85,13 +125,11 @@ void lcd_init()
 	PORTB &= ~(1 << LCD_RESET_PIN);
 
 	_delay_ms(100);
-	toggle_led();
 
 	// Send reset
 	PORTB |= (1 << LCD_RESET_PIN);
 
 	_delay_ms(10);
-	toggle_led();
 
 	lcd_send_cmd(SW_RESET);
 	_delay_ms(100);
@@ -99,15 +137,14 @@ void lcd_init()
 	// Send sleep out
 	lcd_send_cmd(SPLOUT);
 
-	_delay_ms(100);
+	_delay_ms(50);
 
 	lcd_send_cmd(DISPON);
-	// lcd_send_cmd(INVON);
 
 	// Set how the data will be displayed
 	lcd_send_cmd(MADCTL);
 	
-	uint8_t data = 0xC0;
+	uint8_t data = 0xA0;
 	lcd_send_data(&data, 1);
 
 	_delay_ms(10);
@@ -118,29 +155,11 @@ void lcd_init()
 	data = 0x05;
 	lcd_send_data(&data, 1);
 
+	// Make screen black
+	lcd_fill_screen();
+
 	// Start position: 0, 0
-	lcd_set_position(50, 51, 50, 51);
-}
-
-void lcd_set_pixel()
-{
-	lcd_send_cmd(RAMWR);
-	lcd_send_16(RED);
-}
-
-void lcd_write_line(uint8_t xs, uint8_t ys, uint8_t len, uint8_t width, uint8_t color)
-{
-	lcd_set_position(xs, xs + len, ys, ys + width);
-
-	lcd_send_cmd(RAMWR);
-	for (int i = 0; i < len * width; i++) {
-		lcd_send_16(color);
-	}
-}
-
-void lcd_fill_screen()
-{
-	lcd_write_line(MIN_X, MIN_Y, MAX_X, MAX_Y, BLACK);
+	lcd_set_position(MIN_X, MIN_Y, MAX_X, MAX_Y);
 }
 
 void lcd_off()
