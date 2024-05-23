@@ -3,14 +3,176 @@
 #include "util/delay.h"
 #include "Arduino.h"
 #include "avr/interrupt.h"
+#include "util/atomic.h"
 #include "st7735.h"
+#include "actions.h"
 #include "RDA5807.h"
 
-#define LEFT_TURNS B11110000
-#define RIGHT_TURNS B00001111
+#define MIN_FREQ ((uint16_t)9000)
+#define MAX_FREQ ((uint16_t)12000)
 
-volatile uint8_t counter = 0;
-volatile uint8_t turns = 0;
+#define FREQ_CHANGE ((uint8_t)0x00)
+#define CHAN_SELECT_ENTER ((uint8_t)0xff)
+
+#define DUMMY (0)
+#define UP (1)
+#define DOWN (2)
+#define SELECT (3)
+
+#define N_CHANNELS 4
+
+typedef struct {
+	uint16_t freq;
+	char *station;
+} chan_t;
+
+typedef struct {
+	chan_t channels[N_CHANNELS];
+	uint8_t idx;
+} chan_list_t;
+
+RDA5807 radio;
+
+volatile uint16_t freq = 10670; // Default: Europa FM 106.7 MHz
+volatile uint16_t old_freq = freq;
+
+volatile uint8_t action_type = FREQ_CHANGE;
+volatile action current_action = actions[DUMMY];
+volatile int8_t current_idx = 0; // Index for channel menu
+volatile uint32_t lastScreenUpdate = millis();
+
+chan_t saved_channels[N_CHANNELS] = {
+	{
+		.freq = 10670,
+		// .station = "EuropaFM"
+	},
+	{
+		.freq = 10060,
+		// .station = "RockFM"
+	},
+	{
+		.freq = 9600,
+	},
+	{
+		.freq = 10430,
+	}
+};
+
+void print_freq(uint16_t freq)
+{
+	char text[6];
+	sprintf(text, "%d.%d", freq / 100, (freq % 100) / 10);
+
+	lcd_write16(text, 10, 10, WHITE);
+}
+
+void print_menu()
+{
+	lcd_fill_screen();
+
+	if (millis() - lastScreenUpdate > 100) {
+		uint8_t start_idx = current_idx < 3 ? 0 : (current_idx % 3 + current_idx / 3);
+		start_idx = min(start_idx, N_CHANNELS - 3);
+
+		for (uint8_t i = start_idx; i < min(start_idx + 3, N_CHANNELS); i++) {
+			char text[6];
+			sprintf(text, "%d.%d", saved_channels[i].freq / 100, (saved_channels[i].freq % 100) / 10);
+
+			if (i == current_idx) {
+				lcd_write16(text, 10 + 20 * (i - start_idx), 10, BLACK, YELLOW);
+			} else {
+				lcd_write16(text, 10 + 20 * (i - start_idx), 10, BLACK, WHITE);
+			}
+			// lcd_write8(saved_channels.channels[start_idx].station, 10, 30, BLACK, WHITE);
+		}
+
+		lastScreenUpdate = millis();
+	}
+}
+
+void update_freq()
+{
+	if (millis() - lastScreenUpdate > 200 && freq != old_freq) {
+		radio.setFrequency(freq);
+		print_freq(freq);
+
+		lastScreenUpdate = millis();
+		old_freq = freq;
+	}
+}
+
+void dummy()
+{
+	// Sleep?
+}
+
+void up()
+{
+	if (action_type == FREQ_CHANGE) {
+		// Needs atomicity because it's a 16-bit variable
+		ATOMIC_BLOCK(ATOMIC_FORCEON) {
+			freq += 10;
+			// freq = min(freq, MAX_FREQ);
+			// freq = max(freq, MIN_FREQ);
+		}
+
+		update_freq();
+	} else {
+		/* Scroll up on list */
+		current_idx++;
+		current_idx = min(current_idx, N_CHANNELS);
+
+		print_menu();
+	}
+
+	current_action = actions[DUMMY];
+}
+
+void down()
+{
+	if (action_type == FREQ_CHANGE) {
+		ATOMIC_BLOCK(ATOMIC_FORCEON) {
+			freq -= 10;
+			// freq = min(freq, MAX_FREQ);
+			// freq = max(freq, MIN_FREQ);
+		}
+		update_freq();	
+	} else {
+		/* Scroll down on list */
+		current_idx--;
+		current_idx = max(current_idx, 0);
+
+		print_menu();
+	}
+
+	current_action = actions[DUMMY];
+}
+
+void select_chan()
+{
+	if (action_type == CHAN_SELECT_ENTER) {
+		// Enter select menu
+		current_idx = 0;
+		print_menu();
+	} else {
+		lcd_fill_screen();
+
+		old_freq = 0;
+
+		// Update freq
+		update_freq();
+	}
+
+	current_action = actions[DUMMY];
+}
+
+// char *programInfo;
+// char *stationName;
+// char *rdsTime;
+
+// long delayStationName = millis();
+// long delayProgramInfo = millis();
+// uint8_t idxProgramInfo = 0;
 
 void rotary_encoder_init()
 {
@@ -24,53 +186,42 @@ void rotary_encoder_init()
 	EICRA |= (1 << ISC11) | (1 << ISC10) | (1 << ISC01);
 }
 
-// char *programInfo;
-// char *stationName;
-// char *rdsTime;
-
-// long delayStationName = millis();
-// long delayProgramInfo = millis();
-// uint8_t idxProgramInfo = 0;
-
-volatile uint16_t freq = 10670; // Default: Europa FM 106.7 MHz
-
-RDA5807 rx;
-
 void radio_init()
 {
 	/* TODO: Retrieve default freq from EEPROM */
 
-	rx.setup();
+	radio.setup();
 
-  	rx.setRDS(true);
-  	rx.setRdsFifo(true);
+  	radio.setRDS(true);
+  	radio.setRdsFifo(true);
 
-  	rx.setVolume(6);
-  	rx.setMono(false);
-  	rx.setMute(false);
+  	radio.setVolume(6);
+  	radio.setMono(false);
+  	radio.setMute(false);
+	radio.setBass(false);
 
-  	rx.setFrequency(freq);   // It is the frequency you want to select in MHz multiplied by 100.
-  	rx.setFmDeemphasis(1);   // Sets to 50 μs. Used in Europe, Australia, Japan.
-  	rx.setSeekThreshold(50); // Sets RSSI Seek Threshold (0 to 127)
-  	rx.setAFC(true);
+  	radio.setFrequency(freq);   // It is the frequency you want to select in MHz multiplied by 100.
+  	radio.setFmDeemphasis(1);   // Sets to 50 μs. Used in Europe, Australia, Japan.
+  	radio.setSeekThreshold(50); // Sets RSSI Seek Threshold (0 to 127)
+  	radio.setAFC(true);
 }
 
 // SW of Rotary Encoder
 ISR(INT0_vect) {
 	/* TODO: Save current radio station to EEPROM */
+
+	// Enter channel menu / Exit channel menu
+	action_type ^= 0xff;
+	current_action = actions[SELECT];
 }
 
 // Pin B of Rotary Encoder
 ISR(INT1_vect) {
 	// Pin A was already activated -> right turn
 	if (PIND & (1 << PD4)) {
-		turns++;
-		freq += 10 * ((turns & RIGHT_TURNS) >> 1);
-		turns -= 2 * ((turns & RIGHT_TURNS) >> 1);
+		current_action = actions[UP];
 	} else {
-		turns += (1 << 4);
-		freq -= 10 * (((turns & LEFT_TURNS) >> 4) >> 1);
-		turns -= (2 * (((turns & LEFT_TURNS) >> 4) >> 1) << 4);
+		current_action = actions[DOWN];
 	}
 }
 
@@ -80,30 +231,29 @@ void setup()
 
 	// _delay_ms(200);
 
-	// LED pin as output and turn it off
+	// LED pin as output and turn it off to save power
 	DDRB |= (1 << PB5);
 	PORTB &= ~(1 << PB5);
 
-	// rotary_encoder_init();
-
+	rotary_encoder_init();
 	radio_init();
 	lcd_init();
+	lcd_idle();
+
+	// Disable a lot of things for power saving:
+	ADCSRA = 0;
+
+	// PRR |= (1 << PRTIM0) | (1 << PRTIM1) | (1 << PRTIM2);
 
 	sei();
 
-	_delay_ms(10);
+	print_freq(freq);
 
-	lcd_write("Hello, world!", 10, 10, WHITE);
+	/* This is written only once */
+	lcd_write16(" MHz", 10, 5 * 16 + 10, WHITE);
 }
 
 void loop()
 {
-	// uint32_t old_freq = freq;
-
-	// while (1) {
-	// 	if (old_freq != freq) {
-	// 		Serial.println(freq);
-	// 		old_freq = freq;
-	// 	}
-	// }
+	current_action();
 }

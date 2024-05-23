@@ -39,13 +39,7 @@ static inline void SPI_WriteByte(uint8_t data)
 
 void SPI_Write(uint8_t *buffer, size_t buf_size)
 {
-	// /* Set CS to low */
-	// PORTB &= ~(1 << PB2);
-
 	for (size_t i = 0; i < buf_size; i++) {
 		SPI_WriteByte(buffer[i]);
 	}
-
-	// /* Set CS to high */
-	// PORTB |= (1 << PB2);
 }
