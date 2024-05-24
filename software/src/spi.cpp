@@ -1,7 +1,5 @@
 #include <pins_arduino.h>
 
-/* PAGINA 176 din datasheet */
-
 void SPI_Init()
 {
 	/* Set MOSI, SCK and CS as outputs */
@@ -10,10 +8,6 @@ void SPI_Init()
 	/* Config: Master Mode, MSB first, SDA sampled on the rising edge */
 	SPCR |= (1 << MSTR);
 	SPCR &= ~((1 << DORD) | (1 << CPOL) | (1 << CPHA));
-
-	// /* Set SPI frequency to 8MHz */
-	// SPCR &= ~((1 << SPR1) | (1 << SPR0));
-	// SPSR |= (1 << SPI2X);
 
 	/* Set SPI frequency to 4MHz*/
 	SPCR &= ~((1 << SPR0) | (1 << SPR1));

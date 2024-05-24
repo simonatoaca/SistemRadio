@@ -6,7 +6,6 @@
 #include "avr/sleep.h"
 #include "util/atomic.h"
 #include "st7735.h"
-#include "actions.h"
 #include "RDA5807.h"
 
 #define MIN_FREQ ((uint16_t)9000)
@@ -15,12 +14,9 @@
 #define FREQ_CHANGE ((uint8_t)0x00)
 #define CHAN_SELECT_ENTER ((uint8_t)0xff)
 
-#define DUMMY (0)
-#define UP (1)
-#define DOWN (2)
-#define SELECT (3)
-
 #define N_CHANNELS 4
+
+typedef void (*action)(void);
 
 typedef struct {
 	uint16_t freq;
@@ -29,12 +25,11 @@ typedef struct {
 
 RDA5807 radio;
 
-volatile uint16_t freq = 10060;  // Default: RockFM
+volatile uint16_t freq = 10060;  	// Default: RockFM
 volatile uint16_t old_freq = freq;
 
 volatile uint8_t action_type = FREQ_CHANGE;
-volatile action current_action = actions[DUMMY];
-volatile int8_t current_idx = 0; // Index for channel menu
+volatile int8_t current_idx = 0; 	// Index for channel menu
 volatile int8_t old_current_idx = -1;
 volatile uint32_t lastScreenUpdate = millis();
 char *station_name;
@@ -80,6 +75,15 @@ void check_rds_data()
   	}
 }
 
+void dummy()
+{
+	_delay_ms(600);
+	check_rds_data();
+}
+
+// Set current action
+volatile action current_action = dummy;
+
 void print_freq(uint16_t freq)
 {
 	char text[6];
@@ -108,14 +112,13 @@ void print_menu()
 			uint16_t bg_color = (i == current_idx) ? YELLOW : WHITE;
 
 			// Print frequency and radio station
-			lcd_write16(text, 10 + 38 * (i - start_idx), 10, BLACK, bg_color);
-			lcd_write8(saved_channels[i].station, 10 + 38 * (i - start_idx) + 18, 10, BLACK, bg_color);
+			uint16_t xs =  10 + 38 * (i - start_idx);
+			lcd_write16(text, xs, 10, BLACK, bg_color);
+			lcd_write8(saved_channels[i].station, xs + 18, 10, BLACK, bg_color);
 		}
 
 		lastScreenUpdate = millis();
 		old_current_idx = current_idx;
-
-		// current_action = actions[DUMMY];
 	}
 }
 
@@ -128,14 +131,9 @@ void update_freq()
 		lastScreenUpdate = millis();
 		old_freq = freq;
 
-		// current_action = actions[DUMMY];
+		radio.clearRdsBuffer();
+		current_action = dummy;
 	}
-}
-
-void dummy()
-{
-	// set_sleep_mode(SLEEP_MODE_ADC);
-	// sleep_enable();
 }
 
 void select_chan()
@@ -169,12 +167,10 @@ void rotary_encoder_init()
 
 void radio_init()
 {
-	/* TODO: Retrieve default freq from EEPROM */
-
 	radio.setup();
 
-  	// radio.setRDS(true);
-  	// radio.setRdsFifo(true);
+  	radio.setRDS(true);
+  	radio.setRdsFifo(true);
 
   	radio.setVolume(5);
   	radio.setMono(false);
@@ -196,7 +192,7 @@ ISR(INT0_vect) {
 	old_freq = 0;
 	old_current_idx = -1;
 
-	current_action = actions[SELECT];
+	current_action = select_chan;
 }
 
 // Pin B of Rotary Encoder
@@ -229,10 +225,6 @@ ISR(INT1_vect) {
 
 void setup()
 {
-	// Serial.begin(9600);
-
-	// _delay_ms(200);
-
 	// LED pin as output and turn it off to save power
 	DDRB |= (1 << PB5);
 	PORTB &= ~(1 << PB5);
@@ -242,16 +234,12 @@ void setup()
 	lcd_init();
 	lcd_idle();
 
-	// Disable a lot of things for power saving:
 	ADCSRA = 0;
-
-	// PRR |= (1 << PRTIM0) | (1 << PRTIM1) | (1 << PRTIM2);
 
 	sei();
 
 	print_freq(freq);
 
-	/* This is written only once */
 	lcd_write16(" MHz", 10, 5 * 16 + 10, WHITE);
 }
 
