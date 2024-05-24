@@ -3,6 +3,7 @@
 #include "util/delay.h"
 #include "Arduino.h"
 #include "avr/interrupt.h"
+#include "avr/sleep.h"
 #include "util/atomic.h"
 #include "st7735.h"
 #include "actions.h"
@@ -26,35 +27,33 @@ typedef struct {
 	char *station;
 } chan_t;
 
-typedef struct {
-	chan_t channels[N_CHANNELS];
-	uint8_t idx;
-} chan_list_t;
-
 RDA5807 radio;
 
-volatile uint16_t freq = 10670; // Default: Europa FM 106.7 MHz
+volatile uint16_t freq = 10060;  // Default: RockFM
 volatile uint16_t old_freq = freq;
 
 volatile uint8_t action_type = FREQ_CHANGE;
 volatile action current_action = actions[DUMMY];
 volatile int8_t current_idx = 0; // Index for channel menu
+volatile int8_t old_current_idx = -1;
 volatile uint32_t lastScreenUpdate = millis();
 
 chan_t saved_channels[N_CHANNELS] = {
 	{
 		.freq = 10670,
-		// .station = "EuropaFM"
+		.station = "EuropaFM"
 	},
 	{
 		.freq = 10060,
-		// .station = "RockFM"
+		.station = "RockFM  "
 	},
 	{
-		.freq = 9600,
+		.freq = 9610,
+		.station = "KissFM  "
 	},
 	{
-		.freq = 10430,
+		.freq = 9080,
+		.station = "MagicFM "
 	}
 };
 
@@ -63,30 +62,37 @@ void print_freq(uint16_t freq)
 	char text[6];
 	sprintf(text, "%d.%d", freq / 100, (freq % 100) / 10);
 
-	lcd_write16(text, 10, 10, WHITE);
+	ATOMIC_BLOCK(ATOMIC_FORCEON) {
+		lcd_write16(text, 10, 10, WHITE);
+	}
 }
 
 void print_menu()
 {
-	lcd_fill_screen();
+	if (old_current_idx == -1) {
+		lcd_fill_screen();
+	}
 
-	if (millis() - lastScreenUpdate > 100) {
+	if (millis() - lastScreenUpdate > 200 && current_idx != old_current_idx) {
 		uint8_t start_idx = current_idx < 3 ? 0 : (current_idx % 3 + current_idx / 3);
 		start_idx = min(start_idx, N_CHANNELS - 3);
 
 		for (uint8_t i = start_idx; i < min(start_idx + 3, N_CHANNELS); i++) {
-			char text[6];
-			sprintf(text, "%d.%d", saved_channels[i].freq / 100, (saved_channels[i].freq % 100) / 10);
+			char text[7];
+			sprintf(text, "%d.%d ", saved_channels[i].freq / 100, (saved_channels[i].freq % 100) / 10);
+			text[5] = 0;
 
-			if (i == current_idx) {
-				lcd_write16(text, 10 + 20 * (i - start_idx), 10, BLACK, YELLOW);
-			} else {
-				lcd_write16(text, 10 + 20 * (i - start_idx), 10, BLACK, WHITE);
-			}
-			// lcd_write8(saved_channels.channels[start_idx].station, 10, 30, BLACK, WHITE);
+			uint16_t bg_color = (i == current_idx) ? YELLOW : WHITE;
+
+			// Print frequency and radio station
+			lcd_write16(text, 10 + 38 * (i - start_idx), 10, BLACK, bg_color);
+			lcd_write8(saved_channels[i].station, 10 + 38 * (i - start_idx) + 18, 10, BLACK, bg_color);
 		}
 
 		lastScreenUpdate = millis();
+		old_current_idx = current_idx;
+
+		// current_action = actions[DUMMY];
 	}
 }
 
@@ -98,72 +104,29 @@ void update_freq()
 
 		lastScreenUpdate = millis();
 		old_freq = freq;
+
+		// current_action = actions[DUMMY];
 	}
 }
 
 void dummy()
 {
-	// Sleep?
-}
-
-void up()
-{
-	if (action_type == FREQ_CHANGE) {
-		// Needs atomicity because it's a 16-bit variable
-		ATOMIC_BLOCK(ATOMIC_FORCEON) {
-			freq += 10;
-			// freq = min(freq, MAX_FREQ);
-			// freq = max(freq, MIN_FREQ);
-		}
-
-		update_freq();
-	} else {
-		/* Scroll up on list */
-		current_idx++;
-		current_idx = min(current_idx, N_CHANNELS);
-
-		print_menu();
-	}
-
-	current_action = actions[DUMMY];
-}
-
-void down()
-{
-	if (action_type == FREQ_CHANGE) {
-		ATOMIC_BLOCK(ATOMIC_FORCEON) {
-			freq -= 10;
-			// freq = min(freq, MAX_FREQ);
-			// freq = max(freq, MIN_FREQ);
-		}
-		update_freq();	
-	} else {
-		/* Scroll down on list */
-		current_idx--;
-		current_idx = max(current_idx, 0);
-
-		print_menu();
-	}
-
-	current_action = actions[DUMMY];
+	set_sleep_mode(SLEEP_MODE_ADC);
+	sleep_enable();
 }
 
 void select_chan()
 {
 	if (action_type == CHAN_SELECT_ENTER) {
 		// Enter select menu
-		current_idx = 0;
-		print_menu();
+		current_action = print_menu;
 	} else {
 		lcd_fill_screen();
-
-		old_freq = 0;
+		lcd_write16(" MHz", 10, 5 * 16 + 10, WHITE);
 
 		// Update freq
-		update_freq();
+		current_action = update_freq;
 	}
-
-	current_action = actions[DUMMY];
 }
 
 // char *programInfo;
@@ -192,10 +155,10 @@ void radio_init()
 
 	radio.setup();
 
-  	radio.setRDS(true);
-  	radio.setRdsFifo(true);
+  	// radio.setRDS(true);
+  	// radio.setRdsFifo(true);
 
-  	radio.setVolume(6);
+  	radio.setVolume(5);
   	radio.setMono(false);
   	radio.setMute(false);
 	radio.setBass(false);
@@ -208,10 +171,14 @@ void radio_init()
 
 // SW of Rotary Encoder
 ISR(INT0_vect) {
-	/* TODO: Save current radio station to EEPROM */
-
 	// Enter channel menu / Exit channel menu
 	action_type ^= 0xff;
+
+	// Reinitialize values
+	current_idx = 0;
+	old_freq = 0;
+	old_current_idx = -1;
+
 	current_action = actions[SELECT];
 }
 
@@ -219,9 +186,27 @@ ISR(INT0_vect) {
 ISR(INT1_vect) {
 	// Pin A was already activated -> right turn
 	if (PIND & (1 << PD4)) {
-		current_action = actions[UP];
+		if (action_type == FREQ_CHANGE) {
+			freq += 10;
+
+			current_action = update_freq;
+		} else {
+			current_idx++;
+			current_idx = min(current_idx, N_CHANNELS - 1);
+
+			current_action = print_menu;
+		}
 	} else {
-		current_action = actions[DOWN];
+		if (action_type == FREQ_CHANGE) {
+			freq -= 10;
+
+			current_action = update_freq;
+		} else {
+			current_idx--;
+			current_idx = max(current_idx, 0);
+
+			current_action = print_menu;
+		}
 	}
 }
 
