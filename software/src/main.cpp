@@ -37,6 +37,8 @@ volatile action current_action = actions[DUMMY];
 volatile int8_t current_idx = 0; // Index for channel menu
 volatile int8_t old_current_idx = -1;
 volatile uint32_t lastScreenUpdate = millis();
+char *station_name;
+long delay_station_name = millis();
 
 chan_t saved_channels[N_CHANNELS] = {
 	{
@@ -56,6 +58,27 @@ chan_t saved_channels[N_CHANNELS] = {
 		.station = "MagicFM "
 	}
 };
+
+void show_station()
+{
+	if (station_name == NULL || strlen(station_name) < 2 || (millis() - delay_station_name)	< 4000) {
+		return;
+	}
+
+	station_name[9] = 0;
+
+	lcd_write8(station_name, 35, 10, WHITE);
+}
+
+void check_rds_data()
+{
+	if (radio.getRdsReady()) {
+		if (radio.hasRdsInfo()) {
+			station_name = radio.getRdsStationName();
+			show_station();
+		}
+  	}
+}
 
 void print_freq(uint16_t freq)
 {
@@ -111,8 +134,8 @@ void update_freq()
 
 void dummy()
 {
-	set_sleep_mode(SLEEP_MODE_ADC);
-	sleep_enable();
+	// set_sleep_mode(SLEEP_MODE_ADC);
+	// sleep_enable();
 }
 
 void select_chan()
@@ -121,6 +144,9 @@ void select_chan()
 		// Enter select menu
 		current_action = print_menu;
 	} else {
+		freq = saved_channels[current_idx].freq;
+		current_idx = 0;
+
 		lcd_fill_screen();
 		lcd_write16(" MHz", 10, 5 * 16 + 10, WHITE);
 
@@ -128,14 +154,6 @@ void select_chan()
 		current_action = update_freq;
 	}
 }
-
-// char *programInfo;
-// char *stationName;
-// char *rdsTime;
-
-// long delayStationName = millis();
-// long delayProgramInfo = millis();
-// uint8_t idxProgramInfo = 0;
 
 void rotary_encoder_init()
 {
@@ -175,7 +193,6 @@ ISR(INT0_vect) {
 	action_type ^= 0xff;
 
 	// Reinitialize values
-	current_idx = 0;
 	old_freq = 0;
 	old_current_idx = -1;
 
